@@ -1,11 +1,5 @@
-"""
-Сервер приёма AudioSocket потока от Asterisk.
-Парсит аудиофрагменты корректно (аналогично тестовому клиенту).
-"""
-
 import asyncio
 import logging
-
 from .broadcast import broadcast_audio
 from .utils import parse_uuid
 from .config import settings
@@ -53,8 +47,8 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             elif pkt_type == HEARTBEAT_PACKET_TYPE:
                 logging.debug(f"[HEARTBEAT] UUID={pkt_uuid}")
             else:
-                # Неизвестный пакет/log
-                logging.warning(f"[UNKNOWN PACKET] type=0x{pkt_type:02x} UUID={pkt_uuid}")
+                # Служебные/неизвестные ("фоновые") — только DEBUG!
+                logging.debug(f"[UNKNOWN PACKET] type=0x{pkt_type:02x} UUID={pkt_uuid}")
 
     except asyncio.IncompleteReadError:
         logging.info(f"Сессия завершена (или конец потока от {addr})")
@@ -66,7 +60,6 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         )
         writer.close()
         await writer.wait_closed()
-
 
 async def run_audiosocket_server(port=None):
     """
