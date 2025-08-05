@@ -2,7 +2,8 @@
 Конфигурация микросервиса. Использует pydantic для загрузки переменных окружения.
 """
 
-from pydantic import BaseSettings, Field
+from pydantic_settings import BaseSettings
+from pydantic import Field
 from typing import Literal
 from dotenv import load_dotenv
 
