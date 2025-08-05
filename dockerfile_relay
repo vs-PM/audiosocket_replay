@@ -1,6 +1,7 @@
 FROM python:3.11-slim
 WORKDIR /app
-COPY audiosocket_relay/ ./audiosocket_relay/
+COPY v1/ ./v1/
 COPY requirements.txt .
+COPY app.py .
 RUN pip install --no-cache-dir -r requirements.txt
-CMD ["python3", "-m", "app.py"]
+CMD ["python3", "app.py"]
