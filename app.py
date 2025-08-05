@@ -23,7 +23,7 @@ async def main():
     Запуск обоих серверов.
     """
     setup_logging()
-    logging.info(f"Старт сервиса, PROD={settings.PROD}")
+    logging.info(f"Старт сервиса, PROD={settings.PROD_REPLAY}")
     await asyncio.gather(
         run_audiosocket_server(port=settings.AUDIO_PORT),
         run_ws_server(port=settings.WS_PORT),

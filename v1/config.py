@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     AUDIO_PORT: int = Field(default=4000, description="TCP порт для AudioSocket-сервера")
     WS_PORT: int = Field(default=4001, description="Порт для WebSocket-сервера")
     LOG_LEVEL: str = Field(default="INFO", description="Уровень логирования")
-    PRPROD_REPLAY_: Literal['true', 'false', 'True', 'False', True, False] = Field(
+    PROD_REPLAY: Literal['true', 'false', 'True', 'False', True, False] = Field(
         default='false', description="True если PROD, иначе False"
     )
 
