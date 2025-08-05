@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Pydantic/Dotenv config
+.env
+
+# venvs
+env/
+venv/
+ENV/
+.venv/
+pip-wheel-metadata/
+*.egg-info/
+
+# Editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# MacOS/Linux/Windows
+.DS_Store
+*.swp
+*.bak
+*.tmp
+Thumbs.db
