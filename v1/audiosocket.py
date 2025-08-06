@@ -12,7 +12,7 @@ AUDIO_PACKET_TYPE = 0x10
 HEARTBEAT_PACKET_TYPE = 0x02
 
 REC_DIR = os.path.join("data", "rec")      # директория под raw-файлы
-ALL_AUDIO_PATH = os.path.join(REC_DIR, "all.raw")
+ALL_AUDIO_PATH = os.path.join(REC_DIR, "all-2.raw")
 all_audio_file = None
 
 # === ФУНКЦИИ РАБОТЫ С ФАЙЛОМ ===
