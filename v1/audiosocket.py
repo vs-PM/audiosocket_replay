@@ -13,7 +13,7 @@ HEADER_SIZE = 17
 MAX_AUDIO_READ = 320  # Ожидаемый размер аудиочанка
 
 REC_DIR = os.path.join("data", "rec")
-ALL_AUDIO_PATH = os.path.join(REC_DIR, "all.raw")
+ALL_AUDIO_PATH = os.path.join(REC_DIR, "all-3.raw")
 all_audio_file = None
 
 # Логгер для аудиодиагностики
@@ -47,7 +47,6 @@ def close_audio_file():
         all_audio_file.close()
 atexit.register(close_audio_file)
 
-
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     addr = writer.get_extra_info('peername')
     logging.info(f"Новое соединение: {addr}")
@@ -56,7 +55,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     audio_chunk_sizes = Counter()
     uuid_counter = Counter()
     try:
-        header = await reader.readexactly(HEADER_SIZE)
+        header = await reader.readexactly(HEADER_SIZE)  # Строго ровно HEADER_SIZE
         pkttype = header[0]
         uuid = parse_uuid(header[1:17])
         if pkttype != 1:
@@ -70,17 +69,22 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             pkt_type = hdr[0]
             pkt_uuid = parse_uuid(hdr[1:17])
             if pkt_type == AUDIO_PACKET_TYPE:
-                audio = await reader.read(MAX_AUDIO_READ)
+                try:
+                    audio = await reader.readexactly(MAX_AUDIO_READ)
+                except asyncio.IncompleteReadError as e:
+                    audio_diag_logger.error(f"[ERR] Не удалось дочитать аудиофрейм: packet={audio_packet_num+1} (получено {len(e.partial)} байт из {MAX_AUDIO_READ}) UUID={pkt_uuid}")
+                    break
                 audio_packet_num += 1
                 audio_chunk_sizes[len(audio)] += 1
                 uuid_counter[str(pkt_uuid)] += 1
-                # логируем пару байт начала и конца чанка
                 audio_diag_logger.info(
                     f"#{audio_packet_num:05d} UUID={pkt_uuid} size={len(audio)} "
                     f"head={audio[:8].hex()} tail={audio[-8:].hex()}"
                 )
                 if len(audio) != MAX_AUDIO_READ:
                     audio_diag_logger.error(f"[ERR] НЕПОЛНЫЙ ЧАНК: packet={audio_packet_num} size={len(audio)} UUID={pkt_uuid}")
+                    # Не пишем в файл битые фреймы!
+                    continue
                 total_audio_bytes += len(audio)
                 write_all_audio(audio)
                 await broadcast_audio(pkt_uuid, audio)
