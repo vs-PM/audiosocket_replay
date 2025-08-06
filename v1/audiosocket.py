@@ -6,42 +6,36 @@ from .broadcast import broadcast_audio
 from .utils import parse_uuid
 from .config import settings
 
+# Константы пакетов
+INIT_PACKET_TYPE = 0x01
 AUDIO_PACKET_TYPE = 0x10
 HEARTBEAT_PACKET_TYPE = 0x02
+DTMF_PACKET_TYPE = 0x03
+ERROR_PACKET_TYPE = 0xFF
 
 # Глобальные переменные для аудиофайла
 REC_DIR = os.path.join("data", "rec")
-ALL_AUDIO_PATH = os.path.join(REC_DIR, "all-5.raw")
+ALL_AUDIO_PATH = os.path.join(REC_DIR, "all-6.raw")
 all_audio_file = None
 
 def setup_audio_file():
-    """
-    Создать директорию и открыть файл для записи аудио.
-    """
+    """Создание директории и файла для записи аудио"""
     global all_audio_file
     try:
-        if not os.path.exists(REC_DIR):
-            logging.info(f"Создаём директорию для записи аудио: {REC_DIR}")
-            os.makedirs(REC_DIR, exist_ok=True)
+        os.makedirs(REC_DIR, exist_ok=True)
         all_audio_file = open(ALL_AUDIO_PATH, "ab")
-        logging.info(f"Открыт единый аудиофайл для записи: {ALL_AUDIO_PATH}")
+        logging.info(f"Аудиофайл готов: {ALL_AUDIO_PATH}")
     except Exception as e:
-        logging.critical(f"Ошибка открытия файла {ALL_AUDIO_PATH}: {e}")
+        logging.critical(f"Ошибка файла: {e}")
         all_audio_file = None
 
 def write_all_audio(chunk: bytes):
-    global all_audio_file
     if all_audio_file:
         all_audio_file.write(chunk)
         all_audio_file.flush()
-        logging.debug(f"Записано {len(chunk)} байт в {ALL_AUDIO_PATH}")
-    else:
-        logging.error("all_audio_file не открыт — запись не выполнена!")
 
 def close_audio_file():
-    global all_audio_file
     if all_audio_file and not all_audio_file.closed:
-        logging.info(f"Закрываем файл {ALL_AUDIO_PATH}")
         all_audio_file.close()
 
 atexit.register(close_audio_file)
@@ -49,67 +43,92 @@ atexit.register(close_audio_file)
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     addr = writer.get_extra_info('peername')
     logging.info(f"Новое соединение: {addr}")
+    
+    # Отправка приветствия протокола
+    try:
+        writer.write(b"AUDIOSOCKET/1.0\n\n")
+        await writer.drain()
+    except Exception as e:
+        logging.error(f"Ошибка приветствия: {e}")
+
     total_audio_bytes = 0
-    session_uuid = None  # UUID сессии из первого пакета
+    session_uuid = None
     
     try:
-        # 1. Чтение инициализационного пакета (17 байт)
+        # 1. Инициализационный пакет (17 байт)
         init_data = await reader.readexactly(17)
-        if init_data[0] != 0x01:
-            logging.error(f"ОШИБКА: Первый пакет не type=0x01, а {init_data[0]:02x}!")
-            writer.close()
-            await writer.wait_closed()
+        if init_data[0] != INIT_PACKET_TYPE:
+            logging.error(f"ОШИБКА: Первый пакет 0x{init_data[0]:02x}, ожидался 0x01!")
+            # Дополнительная диагностика
+            logging.debug(f"Получено: {init_data.hex()}")
             return
         
         session_uuid = parse_uuid(init_data[1:17])
-        logging.info(f"Началась сессия UUID: {session_uuid}")
+        logging.info(f"Сессия начата: {session_uuid}")
         
-        # 2. Обработка последующих пакетов
+        # 2. Обработка остальных пакетов
+        packet_counter = 0
         while True:
-            # Читаем заголовок пакета (3 байта)
             header = await reader.readexactly(3)
             pkt_type = header[0]
-            payload_length = (header[1] << 8) | header[2]  # Big-endian
+            payload_length = (header[1] << 8) | header[2]
             
-            # Читаем полезную нагрузку
+            # Защита от некорректной длины
+            if payload_length > 65535 or payload_length < 0:
+                logging.error(f"Некорректная длина пакета: {payload_length}")
+                break
+                
             payload = await reader.readexactly(payload_length)
+            packet_counter += 1
             
+            # Логируем первые 5 пакетов для диагностики
+            if packet_counter <= 5:
+                logging.debug(f"Пакет #{packet_counter}: тип=0x{pkt_type:02x}, длина={payload_length}")
+                logging.debug(f"Заголовок: {header.hex()}")
+                logging.debug(f"Payload (16b): {payload[:16].hex()}")
+
             if pkt_type == AUDIO_PACKET_TYPE:
                 total_audio_bytes += len(payload)
-                logging.debug(f"[AUDIO] UUID={session_uuid} bytes={len(payload)}")
                 write_all_audio(payload)
                 await broadcast_audio(session_uuid, payload)
                 
             elif pkt_type == HEARTBEAT_PACKET_TYPE:
-                logging.debug(f"[HEARTBEAT] UUID={session_uuid}")
+                logging.debug(f"Хартбит")
+                
+            elif pkt_type == DTMF_PACKET_TYPE:
+                logging.info(f"DTMF: {payload.decode('ascii', 'ignore')}")
+                
+            elif pkt_type == ERROR_PACKET_TYPE:
+                logging.error(f"Ошибка от Asterisk: код=0x{payload[0]:02x}")
                 
             else:
-                logging.warning(f"Неизвестный тип пакета: 0x{pkt_type:02x} UUID={session_uuid}")
+                logging.warning(f"Неизвестный тип: 0x{pkt_type:02x}")
+                # Сохраняем сырые данные для анализа
+                with open(os.path.join(REC_DIR, "unknown_packets.bin"), "ab") as f:
+                    f.write(header + payload)
     
     except asyncio.IncompleteReadError:
-        logging.info(f"Соединение закрыто клиентом ({addr})")
+        logging.info(f"Соединение закрыто: {addr}")
     except Exception as e:
-        logging.error(f"Ошибка в обработке соединения ({addr}): {str(e)}", exc_info=True)
+        logging.error(f"Критическая ошибка: {str(e)}", exc_info=True)
     finally:
-        logging.info(f"Сессия завершена: {addr}, UUID={session_uuid}, аудиобайт: {total_audio_bytes}")
+        logging.info(f"Сессия завершена: {session_uuid}, аудио={total_audio_bytes} байт")
         writer.close()
         await writer.wait_closed()
 
 async def run_audiosocket_server(port=None):
-    """
-    Запуск TCP сервера AudioSocket.
-    """
-    if port is None:
-        port = settings.AUDIO_PORT
+    """Запуск сервера AudioSocket"""
+    port = port or settings.AUDIO_PORT
     setup_audio_file()
+    
     server = await asyncio.start_server(
         handle_client, 
         "0.0.0.0", 
         port,
-        reuse_address=True
+        reuse_address=True,
+        start_serving=True
     )
-    logging.info(f"AudioSocket сервер запущен на порту {port}")
     
+    logging.info(f"AudioSocket слушает 0.0.0.0:{port}")
     async with server:
         await server.serve_forever()
-        
