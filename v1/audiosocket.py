@@ -5,7 +5,7 @@ import os
 AUDIO_PACKET_TYPE = 0x10
 HEARTBEAT_PACKET_TYPE = 0x02
 HEADER_SIZE = 17
-CHUNK_SIZE = 640  # slin16, 16kHz, 20ms
+CHUNK_SIZE = 320  # slin16, 16kHz, 20ms
 
 REC_DIR = os.path.join("data", "rec")
 ALL_AUDIO_PATH = os.path.join(REC_DIR, "all.raw")
