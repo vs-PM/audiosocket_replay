@@ -15,7 +15,7 @@ ERROR_PACKET_TYPE = 0xFF
 
 # Глобальные переменные для аудиофайла
 REC_DIR = os.path.join("data", "rec")
-ALL_AUDIO_PATH = os.path.join(REC_DIR, "all-6.raw")
+ALL_AUDIO_PATH = os.path.join(REC_DIR, "all-5.raw")
 all_audio_file = None
 
 def setup_audio_file():
@@ -44,13 +44,6 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     addr = writer.get_extra_info('peername')
     logging.info(f"Новое соединение: {addr}")
     
-    # Отправка приветствия протокола
-    try:
-        writer.write(b"AUDIOSOCKET/1.0\n\n")
-        await writer.drain()
-    except Exception as e:
-        logging.error(f"Ошибка приветствия: {e}")
-
     total_audio_bytes = 0
     session_uuid = None
     
@@ -59,8 +52,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         init_data = await reader.readexactly(17)
         if init_data[0] != INIT_PACKET_TYPE:
             logging.error(f"ОШИБКА: Первый пакет 0x{init_data[0]:02x}, ожидался 0x01!")
-            # Дополнительная диагностика
-            logging.debug(f"Получено: {init_data.hex()}")
+            logging.debug(f"Полученные данные: {init_data.hex()}")
             return
         
         session_uuid = parse_uuid(init_data[1:17])
@@ -81,11 +73,11 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             payload = await reader.readexactly(payload_length)
             packet_counter += 1
             
-            # Логируем первые 5 пакетов для диагностики
-            if packet_counter <= 5:
-                logging.debug(f"Пакет #{packet_counter}: тип=0x{pkt_type:02x}, длина={payload_length}")
+            # Логируем первый пакет для диагностики
+            if packet_counter == 1:
+                logging.debug(f"Первый пакет: тип=0x{pkt_type:02x}, длина={payload_length}")
                 logging.debug(f"Заголовок: {header.hex()}")
-                logging.debug(f"Payload (16b): {payload[:16].hex()}")
+                logging.debug(f"Payload (первые 16 байт): {payload[:16].hex()}")
 
             if pkt_type == AUDIO_PACKET_TYPE:
                 total_audio_bytes += len(payload)
