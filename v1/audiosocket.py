@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import atexit
-from collections import Counter
 from .broadcast import broadcast_audio
 from .utils import parse_uuid
 from .config import settings
@@ -10,16 +9,18 @@ from .config import settings
 AUDIO_PACKET_TYPE = 0x10
 HEARTBEAT_PACKET_TYPE = 0x02
 HEADER_SIZE = 17
-MAX_AUDIO_READ = 320  # Ожидаемый размер аудиочанка
+MAX_AUDIO_READ = 320
 
+# Глобальные переменные для аудиофайла
 REC_DIR = os.path.join("data", "rec")
-ALL_AUDIO_PATH = os.path.join(REC_DIR, "all-4.raw")
+ALL_AUDIO_PATH = os.path.join(REC_DIR, "all-5.raw")
 all_audio_file = None
 
-# Логгер для аудиодиагностики
-audio_diag_logger = logging.getLogger("audio_diag")
-
 def setup_audio_file():
+    """
+    Создать директорию и открыть файл для записи аудио.
+    Можно вызывать сколько угодно раз — повторно ничего не случится.
+    """
     global all_audio_file
     try:
         if not os.path.exists(REC_DIR):
@@ -36,7 +37,7 @@ def write_all_audio(chunk: bytes):
     if all_audio_file:
         all_audio_file.write(chunk)
         all_audio_file.flush()
-        audio_diag_logger.debug(f"Записано {len(chunk)} байт в {ALL_AUDIO_PATH}")
+        logging.debug(f"Записано {len(chunk)} байт в {ALL_AUDIO_PATH}")
     else:
         logging.error("all_audio_file не открыт — запись не выполнена!")
 
@@ -45,16 +46,13 @@ def close_audio_file():
     if all_audio_file and not all_audio_file.closed:
         logging.info(f"Закрываем файл {ALL_AUDIO_PATH}")
         all_audio_file.close()
-atexit.register(close_audio_file)
 
+atexit.register(close_audio_file)
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     addr = writer.get_extra_info('peername')
     logging.info(f"Новое соединение: {addr}")
     total_audio_bytes = 0
-    audio_packet_num = 0
-    audio_chunk_sizes = Counter()
-    uuid_counter = Counter()
     try:
         header = await reader.readexactly(HEADER_SIZE)
         pkttype = header[0]
@@ -71,42 +69,34 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             pkt_uuid = parse_uuid(hdr[1:17])
             if pkt_type == AUDIO_PACKET_TYPE:
                 audio = await reader.read(MAX_AUDIO_READ)
-                audio_packet_num += 1
-                audio_chunk_sizes[len(audio)] += 1
-                uuid_counter[str(pkt_uuid)] += 1
-                # логируем пару байт начала и конца чанка
-                audio_diag_logger.info(
-                    f"#{audio_packet_num:05d} UUID={pkt_uuid} size={len(audio)} "
-                    f"head={audio[:8].hex()} tail={audio[-8:].hex()}"
-                )
-                if len(audio) != MAX_AUDIO_READ:
-                    audio_diag_logger.error(f"[ERR] НЕПОЛНЫЙ ЧАНК: packet={audio_packet_num} size={len(audio)} UUID={pkt_uuid}")
                 total_audio_bytes += len(audio)
+                logging.debug(f"[AUDIO] UUID={pkt_uuid} bytes={len(audio)}")
                 write_all_audio(audio)
                 await broadcast_audio(pkt_uuid, audio)
             elif pkt_type == HEARTBEAT_PACKET_TYPE:
-                audio_diag_logger.debug(f"[HEARTBEAT] UUID={pkt_uuid}")
+                logging.debug(f"[HEARTBEAT] UUID={pkt_uuid}")
             else:
-                audio_diag_logger.warning(f"[UNKNOWN PACKET] type=0x{pkt_type:02x} UUID={pkt_uuid}")
+                logging.debug(f"[UNKNOWN PACKET] type=0x{pkt_type:02x} UUID={pkt_uuid}")
     except asyncio.IncompleteReadError:
         logging.info(f"Сессия завершена (или конец потока от {addr})")
-        audio_diag_logger.info("=== Сессия завершена ===")
     except Exception as e:
         logging.error(f"Ошибка в AudioSocket-сессии ({addr}): {e}")
-        audio_diag_logger.exception(f"Исключение: {e}")
     finally:
-        audio_diag_logger.info(
-            f"ИТОГ: всего пакетов={audio_packet_num}, принято аудиобайт={total_audio_bytes}, "
-            f"chunk_sizes={dict(audio_chunk_sizes)}, "
-            f"uuid_counter_top3={uuid_counter.most_common(3)}"
+        logging.info(
+            f"Сессия {addr} завершена, принято аудиобайт: {total_audio_bytes}"
         )
         writer.close()
         await writer.wait_closed()
 
 async def run_audiosocket_server(port=None):
+    """
+    Запуск TCP сервера AudioSocket.
+    Перед стартом сервера вызываем setup_audio_file(),
+    когда уже настроено логирование!
+    """
     if port is None:
         port = settings.AUDIO_PORT
-    setup_audio_file()
+    setup_audio_file()  # Теперь вызываем тут, когда logging уже сконфигурирован!
     server = await asyncio.start_server(handle_client, "0.0.0.0", port)
     logging.info(f"AudioSocket: Слушает порт {port}")
     async with server:
