@@ -7,7 +7,7 @@ from .utils import parse_uuid
 from .config import settings
 
 REC_DIR = os.path.join("data", "rec")
-ALL_AUDIO_PATH = os.path.join(REC_DIR, "all-7.raw")
+ALL_AUDIO_PATH = os.path.join(REC_DIR, "all-8.raw")
 all_audio_file = None
 
 def setup_audio_file():
@@ -36,34 +36,69 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     logging.info(f"Новое соединение: {addr}")
     total_audio_bytes = 0
     session_uuid = None
+    packet_counter = 0
+    unknown_packets_path = os.path.join(REC_DIR, "unknown_packets.bin")
 
     try:
-        # === 0. Считываем init-пакет (17 байт), только один раз в начале соед. ===
-        init_data = await reader.readexactly(17)
-        if init_data[0] != 0x01:
-            logging.error(f"[Relay] ОШИБКА: Первый пакет 0x{init_data[0]:02x} (нужен 0x01)")
-            logging.debug(f"[Relay] Получено: {init_data.hex()}")
-            return
-        session_uuid = parse_uuid(init_data[1:17])
-        logging.info(f"Сессия начата: {session_uuid}")
+        # Попробуем поддерживать оба режима: с init-пакетом и "старт сразу с audio"
+        header = await reader.readexactly(3)
+        pkt_type = header[0]
+        payload_length = int.from_bytes(header[1:3], 'big')
 
-        packet_counter = 0
+        if pkt_type == 0x01 and payload_length == 16:
+            # INIT-пакет: 0x01 00 10 + 16 байт UUID
+            uuid_bytes = await reader.readexactly(16)
+            session_uuid = parse_uuid(uuid_bytes)
+            logging.info(f"Сессия начата (init): {session_uuid}")
+
+        else:
+            # Нет init-пакета, стартуем в режиме "теста" (установим потоковую синхронизацию!)
+            logging.info(f"Сессия начата (без init-пакета) с первого пакета type=0x{pkt_type:02x}, len={payload_length}")
+            # Примем payload первого пакета и обработаем его, как обычно
+            payload = await reader.readexactly(payload_length)
+            packet_counter += 1
+            if pkt_type == 0x10:  # AUDIO_PACKET_TYPE
+                if payload_length >= 16:
+                    uuid = parse_uuid(payload[:16])
+                    audio = payload[16:]
+                else:
+                    uuid = None
+                    audio = payload
+                    logging.warning("Payload AUDIO слишком короток (режим без init)!")
+                total_audio_bytes += len(audio)
+                write_all_audio(audio)
+                await broadcast_audio(uuid, audio)
+            elif pkt_type == 0x02:  # HEARTBEAT
+                logging.debug(f"[Relay] Heartbeat [без init]")
+            elif pkt_type == 0x03:  # DTMF
+                logging.info(f"[Relay] DTMF (без init): {payload.decode('ascii', 'ignore')}")
+            elif pkt_type == 0xFF:  # ERROR
+                if payload:
+                    logging.error(f"[Relay] Ошибка от Asterisk: код=0x{payload[0]:02x}")
+                else:
+                    logging.error("[Relay] Ошибка пакета: пустой payload")
+            else:
+                logging.warning(f"[Relay] Неизвестный тип (без init): 0x{pkt_type:02x}")
+                with open(unknown_packets_path, "ab") as f:
+                    f.write(header + payload)
+
+        # Далее — основной цикл приёма
         while True:
-            # === 1. Читаем strict: 3 байта header (type(1)+len(2)), потом len байт payload ===
             header = await reader.readexactly(3)
             pkt_type = header[0]
             payload_length = int.from_bytes(header[1:3], 'big')
+
             if payload_length > 65535 or payload_length < 0:
                 logging.error(f"Некорректная длина пакета: {payload_length}")
                 break
             payload = await reader.readexactly(payload_length)
             packet_counter += 1
-
             if packet_counter == 1:
                 logging.debug(f"Пакет 1: тип=0x{pkt_type:02x}, длина={payload_length}")
                 logging.debug(f"Header: {header.hex()}")
                 logging.debug(f"Payload[0:16]: {payload[:16].hex()}")
 
+            # === ЛОГИКА РАЗБОРА ПАКЕТОВ ===
             if pkt_type == 0x10:  # AUDIO_PACKET_TYPE
                 if payload_length >= 16:
                     uuid = parse_uuid(payload[:16])
@@ -72,11 +107,9 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                     uuid = session_uuid
                     audio = payload
                     logging.warning("Payload AUDIO слишком короток!")
-
                 total_audio_bytes += len(audio)
                 write_all_audio(audio)
                 await broadcast_audio(uuid, audio)
-
             elif pkt_type == 0x02:  # HEARTBEAT
                 logging.debug(f"[Relay] Heartbeat [{session_uuid}]")
             elif pkt_type == 0x03:  # DTMF
@@ -88,8 +121,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                     logging.error("[Relay] Ошибка пакета: пустой payload")
             else:
                 logging.warning(f"[Relay] Неизвестный тип: 0x{pkt_type:02x}")
-                # Сохраним для диагностики
-                with open(os.path.join(REC_DIR, "unknown_packets.bin"), "ab") as f:
+                with open(unknown_packets_path, "ab") as f:
                     f.write(header + payload)
 
     except asyncio.IncompleteReadError:
