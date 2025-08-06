@@ -5,7 +5,7 @@
 import asyncio
 import logging
 from v1.audiosocket import run_audiosocket_server
-from v1.ws_server import run_ws_server
+
 from v1.config import settings
 
 def setup_logging():
@@ -14,6 +14,7 @@ def setup_logging():
         level=loglevel,
         format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     )
+from v1.ws_server import run_ws_server
 
 async def main():
     setup_logging()

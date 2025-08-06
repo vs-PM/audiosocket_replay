@@ -9,19 +9,18 @@ from .config import settings
 AUDIO_PACKET_TYPE = 0x10
 HEARTBEAT_PACKET_TYPE = 0x02
 HEADER_SIZE = 17
-MAX_AUDIO_READ = 320  # Обычно 320, реально может быть < 320!
+MAX_AUDIO_READ = 320
 
-###########################
-# === БЛОК: Подготовка "единого файла" для записи всего аудиопотока ===
-
-# Определяем директорию и путь к файлу
+# Глобальные переменные для аудиофайла
 REC_DIR = os.path.join("data", "rec")
 ALL_AUDIO_PATH = os.path.join(REC_DIR, "all.raw")
-
-all_audio_file = None  # Глобальная переменная для файлового объекта
+all_audio_file = None
 
 def setup_audio_file():
-    """Создать директорию, открыть файл для записи аудио, сделать логирование."""
+    """
+    Создать директорию и открыть файл для записи аудио.
+    Можно вызывать сколько угодно раз — повторно ничего не случится.
+    """
     global all_audio_file
     try:
         if not os.path.exists(REC_DIR):
@@ -34,7 +33,6 @@ def setup_audio_file():
         all_audio_file = None
 
 def write_all_audio(chunk: bytes):
-    """Записывает аудиобайт в единый файл, с логом и защитой от ошибок."""
     global all_audio_file
     if all_audio_file:
         all_audio_file.write(chunk)
@@ -44,28 +42,18 @@ def write_all_audio(chunk: bytes):
         logging.error("all_audio_file не открыт — запись не выполнена!")
 
 def close_audio_file():
-    """Безопасное закрытие файла при завершении работы приложения."""
     global all_audio_file
     if all_audio_file and not all_audio_file.closed:
         logging.info(f"Закрываем файл {ALL_AUDIO_PATH}")
         all_audio_file.close()
 
-# === Вызовы подготовки и регистрации финального закрытия ===
-setup_audio_file()
 atexit.register(close_audio_file)
-###########################
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    """
-    Обрабатывает подключение одного AudioSocket-клиента (обычно звонок от Asterisk).
-    Корректно парсит любой размер аудиофрагмента (до 320 байт).
-    Также пишет каждый принятый аудиоблок в единый файл.
-    """
     addr = writer.get_extra_info('peername')
     logging.info(f"Новое соединение: {addr}")
     total_audio_bytes = 0
     try:
-        # Первый стартовый пакет — header (type=0x01 + 16 байт UUID)
         header = await reader.readexactly(HEADER_SIZE)
         pkttype = header[0]
         uuid = parse_uuid(header[1:17])
@@ -76,18 +64,14 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             return
         logging.info(f"Началась сессия UUID: {uuid}")
         while True:
-            # Ждём очередной пакет (header: type+uuid)
             hdr = await reader.readexactly(HEADER_SIZE)
             pkt_type = hdr[0]
             pkt_uuid = parse_uuid(hdr[1:17])
             if pkt_type == AUDIO_PACKET_TYPE:
-                # Аудиопакет: читаем до 320 байт
                 audio = await reader.read(MAX_AUDIO_READ)
                 total_audio_bytes += len(audio)
                 logging.debug(f"[AUDIO] UUID={pkt_uuid} bytes={len(audio)}")
-                # --- Основная запись в единый файл ---
                 write_all_audio(audio)
-                # --- Конец записи ---
                 await broadcast_audio(pkt_uuid, audio)
             elif pkt_type == HEARTBEAT_PACKET_TYPE:
                 logging.debug(f"[HEARTBEAT] UUID={pkt_uuid}")
@@ -107,9 +91,12 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 async def run_audiosocket_server(port=None):
     """
     Запуск TCP сервера AudioSocket.
+    Перед стартом сервера вызываем setup_audio_file(),
+    когда уже настроено логирование!
     """
     if port is None:
         port = settings.AUDIO_PORT
+    setup_audio_file()  # Теперь вызываем тут, когда logging уже сконфигурирован!
     server = await asyncio.start_server(handle_client, "0.0.0.0", port)
     logging.info(f"AudioSocket: Слушает порт {port}")
     async with server:
